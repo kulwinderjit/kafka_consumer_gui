@@ -6,7 +6,7 @@ from tkinter import messagebox
 from tkinter import *
 from tkinter.ttk import *
 from kafka import KafkaConsumer
-from datetime import datetime
+from datetime import datetime, timezone
 from kafka.errors import NoBrokersAvailable, KafkaTimeoutError
 from typing import List, Dict
 import sqlite3
@@ -14,9 +14,14 @@ from tkinter import colorchooser
 import json
 import os
 import threading
+import collections
 db_name = 'consumer_config.db'
-version = "2"
-total_lines_limit = 1000
+version = "3"
+total_lines_limit = 20000
+
+ConsumerRecord = collections.namedtuple("ConsumerRecord",
+    ["topic", "partition", "offset", "timestamp", "timestamp_type",
+     "key", "value", "headers", "checksum", "serialized_key_size", "serialized_value_size", "serialized_header_size"])
 
 class ConsumerUI:
     def __init__(self, tab, root):
@@ -74,11 +79,14 @@ class ConsumerUI:
         highlight_button.grid(row=0, column=0, padx=5)
         self.consume_button = Button(control_buttons_frame, text='Consume', command= lambda: self.start_consumer())
         self.consume_button.grid(row=0, column=1, padx=5, sticky=S+W)
-        self.scroll_lock_button_var = IntVar()
-        scroll_lock_button = Checkbutton(control_buttons_frame, text='ScrollLock', variable=self.scroll_lock_button_var)
-        scroll_lock_button.grid(row=0, column=4, sticky=W+S, padx=5)
         clr_button = Button(control_buttons_frame, text='Clear', command = lambda: self.value.delete('1.0', END))
         clr_button.grid(row=0, column=2, sticky=W+S, padx=5)
+        self.scroll_lock_button_var = IntVar()
+        self.include_extra_fields = IntVar()
+        scroll_lock_button = Checkbutton(control_buttons_frame, text='ScrollLock', variable=self.scroll_lock_button_var)
+        scroll_lock_button.grid(row=0, column=4, sticky=W+S, padx=5)
+        extra_button = Checkbutton(control_buttons_frame, text='Extra Headers', variable=self.include_extra_fields)
+        extra_button.grid(row=0, column=5, sticky=W+S, padx=5)
         self.json_format_filter_var = IntVar()
         json_format_filter = Checkbutton(control_buttons_frame, text='Format Json', variable=self.json_format_filter_var)
         json_format_filter.grid(row=0, column=3, sticky=S+W)
@@ -91,7 +99,7 @@ class ConsumerUI:
         buttons_frame.columnconfigure(3, weight=1)
 
         value_label = LabelFrame(self.tab, text='Output', padding='2 2 2 2')
-        self.value = Text(value_label, wrap=NONE, undo=True, maxundo=-1, autoseparators=True)
+        self.value = Text(value_label, wrap=NONE, undo=False, autoseparators=True)
         scrollb = Scrollbar(value_label, command=self.value.yview)
         scrollb_h = Scrollbar(value_label, command=self.value.xview, orient=HORIZONTAL)
         self.value['yscrollcommand'] = scrollb.set
@@ -327,21 +335,37 @@ class ConsumerUI:
             if rule['txt'] in line:
                 return rule['idx']
         return None
-    def consume_multi(self, consumer):
+    def get_key(self, msg: ConsumerRecord) -> str:
+        if msg.key is not None:
+            try:
+                key = msg.key.decode()
+            except:
+                key = msg.key.hex()
+        else:
+            key = "null"
+        return key
+    def get_kafka_headers(self, msg: ConsumerRecord) -> str:
+        ts_str = 'null'
+        if msg.timestamp is not None:
+            ts = msg.timestamp/1000.0
+            ts_str = datetime.fromtimestamp(ts, tz = timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[0:23]
+        return f"Partition: {msg.partition} Offset: {msg.offset} Timestamp: {ts_str} Key: {self.get_key(msg)}"
+    def consume_multi(self, consumer: KafkaConsumer):
         while(not consumer._closed):
+            extra_fields = self.include_extra_fields.get()
             filter = str(self.message_filter.get())
             or_filters = filter.split(',')
             or_filters = [f for f in or_filters if len(f) > 0]
             and_filters = filter.split(';')
             and_filters = [f for f in and_filters if len(f) > 0]
             for msg in consumer:
-                if msg.key is not None:
-                    try:
-                        key = msg.key.decode()
-                    except:
-                        key = msg.key.hex()
-                else:
-                    key = "null"
+                try:
+                    if extra_fields == 1:
+                        key = self.get_kafka_headers(msg)
+                    else:
+                        key = self.get_key(msg)
+                except:
+                    key = 'null'
                 try:
                     message = msg.value.decode()
                 except:
@@ -375,6 +399,7 @@ class ConsumerUI:
 
     def consume_to_file(self, consumer, file):
         self.append_text('Started consuming to file : ' + str(datetime.now()) + '\n')
+        extra_fields = self.include_extra_fields.get()
         filter = str(self.message_filter.get())
         or_filters = filter.split(',')
         or_filters = [f for f in or_filters if len(f) > 0]
@@ -382,13 +407,14 @@ class ConsumerUI:
         and_filters = [f for f in and_filters if len(f) > 0]
         with open(file,'w',newline='') as csf:
             for msg in consumer:
-                if msg.key is not None:
-                    try:
-                        key = msg.key.decode()
-                    except:
-                        key = msg.key.hex()
+                if extra_fields == 1:
+                    key = self.get_kafka_headers(msg)
                 else:
-                    key = "null"
+                    key = self.get_key(msg)
+                try:
+                    message = msg.value.decode()
+                except:
+                    message = msg.value.hex()
                 try:
                     message = msg.value.decode()
                 except:
@@ -415,16 +441,17 @@ class ConsumerUI:
     def limit_text_value(self):
         total_no_of_lines = int(self.value.index('end-1c').split('.')[0])
         if total_no_of_lines >= total_lines_limit:
-            self.value.delete("1.0", "2.0")
+            self.value.delete("1.0", f'{total_no_of_lines - total_lines_limit}.0')
 
     def get_kafka_consumer(self, servers, type, timeout):
-        consumer = KafkaConsumer(bootstrap_servers=servers,auto_offset_reset=type, consumer_timeout_ms=timeout)
+        consumer = KafkaConsumer(bootstrap_servers=servers,auto_offset_reset=type, consumer_timeout_ms=timeout, check_crcs=False)
         return consumer
 
     def consume_to_kafka(self, servers, topics, type, file):
         topis_list = str(topics).split(',')
         try:
             if self.consumer is not None:
+                self.consumer.unsubscribe()
                 self.consumer.close()
                 self.consume_button.config(text='Consume')
                 self.consumer = None
@@ -580,12 +607,12 @@ class ConsumerUI:
         if d.ok_done:
             self.set_highlighter(self.highligher_rules)
             for rule in self.highligher_rules:
-                self.value.tag_configure(rule['idx'], background=rule['bg'], foreground=rule['fg'])
+                self.value.tag_configure(rule['idx'], background=rule['bg'], foreground=rule['fg'], selectforeground=rule['bg'], selectbackground=rule['fg'])
     def initiate_highlight(self):
         _highligher_rules = self.get_highlighter()
         for rule in _highligher_rules:
             self.highligher_rules.append(rule)
-            self.value.tag_configure(rule['idx'], background=rule['bg'], foreground=rule['fg'])
+            self.value.tag_configure(rule['idx'], background=rule['bg'], foreground=rule['fg'], selectforeground=rule['bg'], selectbackground=rule['fg'])
     
 class SqlliteConn(): 
     def __init__(self, db_name): 
@@ -796,8 +823,8 @@ init_db()
 root = Tk()
 root.title('Consumer for Kafka')
 root.protocol("WM_DELETE_WINDOW", on_closing)
-root.geometry('900x600')
-root.minsize(width=950, height=600)
+root.geometry('1050x600')
+root.minsize(width=1050, height=600)
 customed_style = Style()
 customed_style.configure('Custom.TNotebook.Tab', padding=[15, 5])
 tabControl = CustomNotebook2(root, style="Custom.TNotebook")
