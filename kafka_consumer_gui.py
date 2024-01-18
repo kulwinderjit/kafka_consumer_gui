@@ -16,7 +16,7 @@ import os
 import threading
 import collections
 db_name = 'consumer_config.db'
-version = "3"
+version = "4"
 total_lines_limit = 20000
 
 ConsumerRecord = collections.namedtuple("ConsumerRecord",
@@ -475,7 +475,7 @@ class ConsumerUI:
                 if not valid:
                     messagebox.showwarning(title='Select file first', message=file)
                     return
-                self.consumer = self.get_kafka_consumer(servers, type, 1000)
+                self.consumer = self.get_kafka_consumer(servers, type, 2000)
                 self.main_window.update()
                 self.consumer.subscribe(topis_list)
                 self.main_window.update()
