@@ -83,10 +83,13 @@ class ConsumerUI:
         clr_button.grid(row=0, column=2, sticky=W+S, padx=5)
         self.scroll_lock_button_var = IntVar()
         self.include_extra_fields = IntVar()
+        self.raw_message = IntVar()
         scroll_lock_button = Checkbutton(control_buttons_frame, text='ScrollLock', variable=self.scroll_lock_button_var)
         scroll_lock_button.grid(row=0, column=4, sticky=W+S, padx=5)
         extra_button = Checkbutton(control_buttons_frame, text='Extra Headers', variable=self.include_extra_fields)
         extra_button.grid(row=0, column=5, sticky=W+S, padx=5)
+        all_headers_button = Checkbutton(control_buttons_frame, text='Raw Message', variable=self.raw_message)
+        all_headers_button.grid(row=0, column=6, sticky=W+S, padx=5)
         self.json_format_filter_var = IntVar()
         json_format_filter = Checkbutton(control_buttons_frame, text='Format Json', variable=self.json_format_filter_var)
         json_format_filter.grid(row=0, column=3, sticky=S+W)
@@ -315,14 +318,18 @@ class ConsumerUI:
     def append_message(self, key, message):
         format = self.json_format_filter_var.get()
         line = None
-        if format == 1:
-            try:
-                message = json.loads(message)
-                line = str.format('{} : {}{}{}', key, '\n', json.dumps(message, indent=2), '\n')
-            except:
-                line = str.format('{} : {}{}', key, message, '\n')
+        raw_message = self.raw_message.get()
+        if raw_message == 1:
+            line = message
         else:
-            line = str.format('{} : {}{}', key, message, '\n')
+            if format == 1:
+                try:
+                    message = json.loads(message)
+                    line = str.format('{} : {}{}{}', key, '\n', json.dumps(message, indent=2), '\n')
+                except:
+                    line = str.format('{} : {}{}', key, message, '\n')
+            else:
+                line = str.format('{} : {}{}', key, message, '\n')
         tag = self.get_tag_name(line)
         if tag:
             self.append_text(line, tag)
@@ -350,26 +357,32 @@ class ConsumerUI:
             ts = msg.timestamp/1000.0
             ts_str = datetime.fromtimestamp(ts, tz = timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[0:23]
         return f"Partition: {msg.partition} Offset: {msg.offset} Timestamp: {ts_str} Key: {self.get_key(msg)}"
+
     def consume_multi(self, consumer: KafkaConsumer):
         while(not consumer._closed):
             extra_fields = self.include_extra_fields.get()
+            raw_message = self.raw_message.get()
             filter = str(self.message_filter.get())
             or_filters = filter.split(',')
             or_filters = [f for f in or_filters if len(f) > 0]
             and_filters = filter.split(';')
             and_filters = [f for f in and_filters if len(f) > 0]
             for msg in consumer:
-                try:
-                    if extra_fields == 1:
-                        key = self.get_kafka_headers(msg)
-                    else:
-                        key = self.get_key(msg)
-                except:
-                    key = 'null'
-                try:
-                    message = msg.value.decode()
-                except:
-                    message = msg.value.hex()
+                if raw_message == 1:
+                    key = None
+                    message = str(msg).replace('ConsumerRecord','') + '\n'
+                else:
+                    try:
+                        if extra_fields == 1:
+                            key = self.get_kafka_headers(msg)
+                        else:
+                            key = self.get_key(msg)
+                    except:
+                        key = 'null'
+                    try:
+                        message = msg.value.decode()
+                    except:
+                        message = msg.value.hex()
                 if len(and_filters) > 1:
                     if all(f in message or f in key for f in and_filters):
                         self.append_message(key, message)
@@ -387,19 +400,24 @@ class ConsumerUI:
     def write_to_file(self, csf, key, message):
         format = self.json_format_filter_var.get()
         line = None
-        if format == 1:
-            try:
-                message = json.loads(message)
-                line = str.format('{} : {}{}', key, '\n', json.dumps(message, indent=2))
-            except:
-                line = str.format('{} : {}{}', key, message, '\n')
+        raw_message = self.raw_message.get()
+        if raw_message == 1:
+            line = message
         else:
-            line = str.format('{} : {}{}', key, message, '\n')
+            if format == 1:
+                try:
+                    message = json.loads(message)
+                    line = str.format('{} : {}{}', key, '\n', json.dumps(message, indent=2))
+                except:
+                    line = str.format('{} : {}{}', key, message, '\n')
+            else:
+                line = str.format('{} : {}{}', key, message, '\n')
         csf.writelines([line])
 
     def consume_to_file(self, consumer, file):
         self.append_text('Started consuming to file : ' + str(datetime.now()) + '\n')
         extra_fields = self.include_extra_fields.get()
+        raw_message = self.raw_message.get()
         filter = str(self.message_filter.get())
         or_filters = filter.split(',')
         or_filters = [f for f in or_filters if len(f) > 0]
@@ -407,18 +425,18 @@ class ConsumerUI:
         and_filters = [f for f in and_filters if len(f) > 0]
         with open(file,'w',newline='') as csf:
             for msg in consumer:
-                if extra_fields == 1:
-                    key = self.get_kafka_headers(msg)
+                if raw_message == 1:
+                    key = ''
+                    message = str(msg).replace('ConsumerRecord','') + '\n'
                 else:
-                    key = self.get_key(msg)
-                try:
-                    message = msg.value.decode()
-                except:
-                    message = msg.value.hex()
-                try:
-                    message = msg.value.decode()
-                except:
-                    message = msg.value.hex()
+                    if extra_fields == 1:
+                        key = self.get_kafka_headers(msg)
+                    else:
+                        key = self.get_key(msg)
+                    try:
+                        message = msg.value.decode()
+                    except:
+                        message = msg.value.hex()
                 if len(and_filters) > 1:
                     if all(f in message or f in key for f in and_filters):
                         self.write_to_file(csf, key, message)
