@@ -16,7 +16,7 @@ import os
 import threading
 import collections
 db_name = 'consumer_config.db'
-version = "4"
+version = "5"
 total_lines_limit = 20000
 
 ConsumerRecord = collections.namedtuple("ConsumerRecord",
