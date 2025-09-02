@@ -356,7 +356,7 @@ class ConsumerUI:
         if msg.timestamp is not None:
             ts = msg.timestamp/1000.0
             ts_str = datetime.fromtimestamp(ts, tz = timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[0:23]
-        return f"Partition: {msg.partition} Offset: {msg.offset} Timestamp: {ts_str} Key: {self.get_key(msg)}"
+        return f"Topic: {msg.topic} Partition: {msg.partition} Offset: {msg.offset} Timestamp: {ts_str} Key: {self.get_key(msg)}"
 
     def consume_multi(self, consumer: KafkaConsumer):
         while(not consumer._closed):
